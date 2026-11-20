@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.CalendarToday
 import android.speech.RecognizerIntent
 import android.content.Intent
 import androidx.compose.material3.*
@@ -57,6 +58,7 @@ fun AddTransactionScreen(
     var showScanSourceDialog by remember { mutableStateOf(false) }
     var isOcrLoading by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     val incomeCategories = remember { listOf("Salary", "Business", "Freelance", "Investment", "Others") }
 
@@ -380,13 +382,30 @@ fun AddTransactionScreen(
                 )
 
                 // Date Selection
-                OutlinedTextField(
-                    value = formattedDate,
-                    onValueChange = {},
-                    label = { Text("Transaction Date") },
-                    readOnly = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = formattedDate,
+                        onValueChange = {},
+                        label = { Text("Transaction Date") },
+                        readOnly = true,
+                        trailingIcon = {
+                            IconButton(onClick = { showDatePicker = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarToday,
+                                    contentDescription = "Select Transaction Date"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showDatePicker = true }
+                    )
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .clickable { showDatePicker = true }
+                    )
+                }
 
                 Spacer(Modifier.weight(1f))
 
@@ -470,6 +489,85 @@ fun AddTransactionScreen(
                         }
                     }
                 )
+            }
+
+            // Interactive Material 3 Date Picker Dialog
+            if (showDatePicker) {
+                val initialUtcMillis = remember(dateMs) {
+                    val localCal = Calendar.getInstance().apply { timeInMillis = dateMs }
+                    val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                        clear()
+                        set(localCal.get(Calendar.YEAR), localCal.get(Calendar.MONTH), localCal.get(Calendar.DAY_OF_MONTH))
+                    }
+                    utcCal.timeInMillis
+                }
+
+                val datePickerState = rememberDatePickerState(
+                    initialSelectedDateMillis = initialUtcMillis,
+                    selectableDates = object : SelectableDates {
+                        override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                            val localCal = Calendar.getInstance()
+                            val endOfLocalTodayInUtc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                                clear()
+                                set(
+                                    localCal.get(Calendar.YEAR),
+                                    localCal.get(Calendar.MONTH),
+                                    localCal.get(Calendar.DAY_OF_MONTH),
+                                    23, 59, 59
+                                )
+                                set(Calendar.MILLISECOND, 999)
+                            }.timeInMillis
+                            return utcTimeMillis <= endOfLocalTodayInUtc
+                        }
+
+                        override fun isSelectableYear(year: Int): Boolean {
+                            return year <= Calendar.getInstance().get(Calendar.YEAR)
+                        }
+                    }
+                )
+
+                DatePickerDialog(
+                    onDismissRequest = { showDatePicker = false },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                datePickerState.selectedDateMillis?.let { selectedUtc ->
+                                    val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                                        timeInMillis = selectedUtc
+                                    }
+                                    val targetCal = Calendar.getInstance().apply {
+                                        set(Calendar.YEAR, utcCal.get(Calendar.YEAR))
+                                        set(Calendar.MONTH, utcCal.get(Calendar.MONTH))
+                                        set(Calendar.DAY_OF_MONTH, utcCal.get(Calendar.DAY_OF_MONTH))
+                                        val now = Calendar.getInstance()
+                                        if (utcCal.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
+                                            utcCal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
+                                        ) {
+                                            set(Calendar.HOUR_OF_DAY, now.get(Calendar.HOUR_OF_DAY))
+                                            set(Calendar.MINUTE, now.get(Calendar.MINUTE))
+                                            set(Calendar.SECOND, now.get(Calendar.SECOND))
+                                        } else {
+                                            set(Calendar.HOUR_OF_DAY, 12)
+                                            set(Calendar.MINUTE, 0)
+                                            set(Calendar.SECOND, 0)
+                                        }
+                                    }
+                                    dateMs = targetCal.timeInMillis
+                                }
+                                showDatePicker = false
+                            }
+                        ) {
+                            Text("OK", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDatePicker = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                ) {
+                    DatePicker(state = datePickerState)
+                }
             }
 
             // Loading overlay during OCR execution
