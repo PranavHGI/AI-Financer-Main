@@ -374,21 +374,36 @@ fun VoiceAssistantBottomSheet(
                     }
                 ),
                 trailingIcon = {
-                    IconButton(
-                        onClick = {
-                            if (textInput.isNotBlank()) {
+                    if (textInput.isNotBlank()) {
+                        IconButton(
+                            onClick = {
                                 viewModel.processCommand(textInput)
                                 textInput = ""
                                 keyboardController?.hide()
                             }
-                        },
-                        enabled = textInput.isNotBlank()
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send Command",
-                            tint = if (textInput.isNotBlank()) FinanceTeal else MaterialTheme.colorScheme.outline
-                        )
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send Command",
+                                tint = FinanceTeal
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                if (uiState.isListening) {
+                                    viewModel.stopListening()
+                                } else {
+                                    viewModel.startListening()
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = if (uiState.isListening) Icons.Default.GraphicEq else Icons.Default.Mic,
+                                contentDescription = if (uiState.isListening) "Stop listening" else "Start listening",
+                                tint = if (uiState.isListening) FinanceTeal else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()

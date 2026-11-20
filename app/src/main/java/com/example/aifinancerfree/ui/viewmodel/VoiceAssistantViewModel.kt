@@ -81,7 +81,26 @@ class VoiceAssistantViewModel(
                             )
                         }
                     }
-                    SpeechState.Idle, SpeechState.Ready, SpeechState.Initializing -> {
+                    SpeechState.Ready -> {
+                        _uiState.update {
+                            it.copy(
+                                isListening = true,
+                                isProcessing = false,
+                                rmsDb = 0f,
+                                errorMessage = null
+                            )
+                        }
+                    }
+                    SpeechState.Initializing -> {
+                        _uiState.update {
+                            it.copy(
+                                isListening = true,
+                                isProcessing = false,
+                                errorMessage = null
+                            )
+                        }
+                    }
+                    SpeechState.Idle -> {
                         _uiState.update { it.copy(isListening = false) }
                     }
                 }
@@ -116,6 +135,8 @@ class VoiceAssistantViewModel(
         ttsManager.stop()
         _uiState.update {
             it.copy(
+                isListening = true,
+                isProcessing = false,
                 errorMessage = null,
                 undoStatus = null,
                 liveTranscript = ""
