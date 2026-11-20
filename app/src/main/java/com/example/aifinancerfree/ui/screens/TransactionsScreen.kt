@@ -49,30 +49,34 @@ fun TransactionsScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.loadData()
+        if (txs.isEmpty()) {
+            viewModel.loadData()
+        }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Transactions", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = addTx) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Transaction")
-                    }
-                }
-            )
-        }
-    ) { pad ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(pad)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Search Bar
-            OutlinedTextField(
+            Text(
+                text = "Transactions",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = addTx) {
+                Icon(Icons.Default.Add, contentDescription = "Add Transaction")
+            }
+        }
+
+        // Search Bar
+        OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 placeholder = { Text("Search transactions...") },
@@ -196,7 +200,6 @@ fun TransactionsScreen(
             }
         }
     }
-}
 
 @Composable
 private fun TransactionItem(

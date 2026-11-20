@@ -34,7 +34,9 @@ fun GoalsScreen(viewModel: GoalsViewModel) {
     var showAddSavingsDialog by remember { mutableStateOf<GoalResponse?>(null) }
 
     LaunchedEffect(Unit) {
-        viewModel.fetchGoals()
+        if (goals.isEmpty()) {
+            viewModel.fetchGoals()
+        }
     }
 
     Box(

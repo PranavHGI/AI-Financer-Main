@@ -41,7 +41,10 @@ class MainActivity : ComponentActivity() {
                 authRepository = app.authRepository,
                 consentPreferences = app.consentPreferences,
                 transactionRepository = app.transactionRepository,
-                databaseHelper = app.databaseHelper
+                databaseHelper = app.databaseHelper,
+                voiceAssistantRepositoryProvider = { app.voiceAssistantRepository },
+                speechManagerProvider = { app.speechRecognitionManager },
+                ttsManagerProvider = { app.textToSpeechManager }
             )
         }
     }
@@ -54,6 +57,9 @@ private fun AIFinancerApp(
     consentPreferences: ConsentPreferences,
     transactionRepository: TransactionRepository,
     databaseHelper: DatabaseHelper,
+    voiceAssistantRepositoryProvider: (() -> com.example.aifinancerfree.data.repository.VoiceAssistantRepository)? = null,
+    speechManagerProvider: (() -> com.example.aifinancerfree.data.voice.SpeechRecognitionManager)? = null,
+    ttsManagerProvider: (() -> com.example.aifinancerfree.data.voice.TextToSpeechManager)? = null,
     themeViewModel: ThemeViewModel = viewModel()
 ) {
     val mode by themeViewModel.themeMode.collectAsStateWithLifecycle()
@@ -67,13 +73,17 @@ private fun AIFinancerApp(
         authRepository = authRepository,
         tokenManager = tokenManager,
         transactionRepository = transactionRepository,
-        databaseHelper = databaseHelper
+        databaseHelper = databaseHelper,
+        voiceAssistantRepositoryProvider = voiceAssistantRepositoryProvider,
+        speechManagerProvider = speechManagerProvider,
+        ttsManagerProvider = ttsManagerProvider
     )
     val authViewModel: AuthViewModel = viewModel(factory = factory)
     val profileViewModel: ProfileViewModel = viewModel(factory = factory)
     val financeViewModel: FinanceViewModel = viewModel(factory = factory)
     val advisorViewModel: AdvisorViewModel = viewModel(factory = factory)
     val goalsViewModel: GoalsViewModel = viewModel(factory = factory)
+    val voiceViewModel: com.example.aifinancerfree.ui.viewmodel.VoiceAssistantViewModel = viewModel(factory = factory)
 
     val startDestination = if (tokenManager.getAccessToken() != null) {
         Routes.AuthGraph
@@ -89,6 +99,7 @@ private fun AIFinancerApp(
             financeViewModel = financeViewModel,
             advisorViewModel = advisorViewModel,
             goalsViewModel = goalsViewModel,
+            voiceViewModel = voiceViewModel,
             consentPrefs = consentPreferences,
             mode = mode,
             selectTheme = { themeViewModel.selectTheme(it) },

@@ -126,9 +126,7 @@ class SmsSyncManager(
                         // Extract transaction data
                         val extracted = SmsExtractor.extract(body, sender = address)
                         if (extracted != null) {
-                            val clientId = java.util.UUID.randomUUID().toString()
-
-                            // Register SMS fingerprint
+                            // Register SMS fingerprint so this message is tracked
                             val smsValues = ContentValues().apply {
                                 put(DatabaseHelper.COL_SMS_USER_ID, activeUser)
                                 put(DatabaseHelper.COL_SMS_FINGERPRINT, "${bodyHash}_${dateMs}")
@@ -141,6 +139,25 @@ class SmsSyncManager(
                                 smsValues,
                                 android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE
                             )
+                            existingFingerprints.getOrPut(bodyHash) { mutableListOf() }.add(dateMs)
+
+                            // Content-based deduplication: prevent duplicate row in TABLE_TRANSACTIONS
+                            // (handles live SMS broadcast, manual entry, or remote fetch collisions)
+                            val isDuplicate = dbHelper.hasMatchingTransaction(
+                                db = localDb,
+                                userId = activeUser,
+                                type = extracted.type,
+                                amount = extracted.amount,
+                                merchant = extracted.merchant,
+                                dateMs = dateMs
+                            )
+                            if (isDuplicate) {
+                                Log.i(TAG, "[INBOX SCAN DEDUP] Skipping duplicate transaction for '${extracted.merchant}' of ₹${extracted.amount}")
+                                alreadyParsedCount++
+                                continue
+                            }
+
+                            val clientId = java.util.UUID.randomUUID().toString()
 
                             // Save as local transaction record (synced = 0) with client_id and source
                             val txValues = ContentValues().apply {
@@ -157,8 +174,6 @@ class SmsSyncManager(
                                 put(DatabaseHelper.COL_TX_SYNCED, 0)
                             }
                             localDb.insert(DatabaseHelper.TABLE_TRANSACTIONS, null, txValues)
-
-                            existingFingerprints.getOrPut(bodyHash) { mutableListOf() }.add(dateMs)
                             newTxCount++
                         } else {
                             nonFinancialCount++

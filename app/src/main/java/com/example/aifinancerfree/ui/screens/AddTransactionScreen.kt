@@ -21,6 +21,7 @@ import android.speech.RecognizerIntent
 import android.content.Intent
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -102,7 +103,7 @@ fun AddTransactionScreen(
         }
     }
 
-    var tempImageUri by remember { mutableStateOf<Uri?>(null) }
+    var tempImageUriString by rememberSaveable { mutableStateOf<String?>(null) }
 
     val accountsList = listOf("Cash", "Bank Account", "Credit Card")
     val formattedDate = remember(dateMs) {
@@ -111,10 +112,11 @@ fun AddTransactionScreen(
 
     // Helper function to create temporary shared Uri
     fun createTempImageUri(ctx: Context): Uri {
-        val tempFile = File(ctx.cacheDir, "temp_receipt.jpg").apply {
-            createNewFile()
-            deleteOnExit()
+        val tempFile = File(ctx.cacheDir, "temp_receipt.jpg")
+        if (tempFile.exists()) {
+            tempFile.delete()
         }
+        tempFile.createNewFile()
         return FileProvider.getUriForFile(
             ctx,
             "${ctx.packageName}.fileprovider",
@@ -131,14 +133,25 @@ fun AddTransactionScreen(
             viewModel.uploadReceipt(context, it) { response, error ->
                 isOcrLoading = false
                 if (response != null) {
-                    amount = response.amount.toString()
-                    merchant = response.merchant
-                    // Map category if it exists in our default list
+                    if (response.amount > 0.0) {
+                        amount = response.amount.toString()
+                    }
+                    if (response.merchant.isNotBlank() && response.merchant != "Unknown Merchant") {
+                        merchant = response.merchant
+                    }
                     if (TransactionRepository.DEFAULT_CATEGORIES.contains(response.category)) {
                         selectedCategory = response.category
                     }
+                    if (response.date > 0) {
+                        dateMs = response.date * 1000L
+                    }
                     notes = "Parsed via Receipt OCR scanner"
-                    Toast.makeText(context, "Scan complete! Amount: ₹${response.amount}", Toast.LENGTH_LONG).show()
+                    val msg = if (response.amount > 0.0) {
+                        "Scan complete! Amount: ₹${response.amount}"
+                    } else {
+                        "Scan complete! Please verify or enter amount."
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 } else {
                     Toast.makeText(context, "Scan failed: $error", Toast.LENGTH_LONG).show()
                 }
@@ -151,18 +164,32 @@ fun AddTransactionScreen(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         if (success) {
-            tempImageUri?.let { uri ->
+            val uriStr = tempImageUriString
+            if (uriStr != null) {
+                val uri = Uri.parse(uriStr)
                 isOcrLoading = true
                 viewModel.uploadReceipt(context, uri) { response, error ->
                     isOcrLoading = false
                     if (response != null) {
-                        amount = response.amount.toString()
-                        merchant = response.merchant
+                        if (response.amount > 0.0) {
+                            amount = response.amount.toString()
+                        }
+                        if (response.merchant.isNotBlank() && response.merchant != "Unknown Merchant") {
+                            merchant = response.merchant
+                        }
                         if (TransactionRepository.DEFAULT_CATEGORIES.contains(response.category)) {
                             selectedCategory = response.category
                         }
+                        if (response.date > 0) {
+                            dateMs = response.date * 1000L
+                        }
                         notes = "Parsed via Receipt OCR scanner"
-                        Toast.makeText(context, "Scan complete! Amount: ₹${response.amount}", Toast.LENGTH_LONG).show()
+                        val msg = if (response.amount > 0.0) {
+                            "Scan complete! Amount: ₹${response.amount}"
+                        } else {
+                            "Scan complete! Please verify or enter amount."
+                        }
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(context, "Scan failed: $error", Toast.LENGTH_LONG).show()
                     }
@@ -177,7 +204,7 @@ fun AddTransactionScreen(
     ) { isGranted ->
         if (isGranted) {
             val uri = createTempImageUri(context)
-            tempImageUri = uri
+            tempImageUriString = uri.toString()
             cameraLauncher.launch(uri)
         } else {
             Toast.makeText(context, "Camera permission is required to scan receipt", Toast.LENGTH_SHORT).show()
@@ -422,7 +449,7 @@ fun AddTransactionScreen(
 
                                 if (hasCamPermission) {
                                     val uri = createTempImageUri(context)
-                                    tempImageUri = uri
+                                    tempImageUriString = uri.toString()
                                     cameraLauncher.launch(uri)
                                 } else {
                                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)

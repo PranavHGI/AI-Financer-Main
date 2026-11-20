@@ -11,8 +11,12 @@ class ViewModelFactory(
     private val authRepository: AuthRepository,
     private val tokenManager: TokenManager,
     private val transactionRepository: TransactionRepository,
-    private val databaseHelper: DatabaseHelper
+    private val databaseHelper: DatabaseHelper,
+    private val voiceAssistantRepositoryProvider: (() -> com.example.aifinancerfree.data.repository.VoiceAssistantRepository)? = null,
+    private val speechManagerProvider: (() -> com.example.aifinancerfree.data.voice.SpeechRecognitionManager)? = null,
+    private val ttsManagerProvider: (() -> com.example.aifinancerfree.data.voice.TextToSpeechManager)? = null
 ) : ViewModelProvider.Factory {
+
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
@@ -30,6 +34,12 @@ class ViewModelFactory(
             }
             modelClass.isAssignableFrom(GoalsViewModel::class.java) -> {
                 GoalsViewModel(transactionRepository) as T
+            }
+            modelClass.isAssignableFrom(VoiceAssistantViewModel::class.java) -> {
+                val voiceRepo = voiceAssistantRepositoryProvider?.invoke() ?: throw IllegalStateException("VoiceAssistantRepository not provided")
+                val speech = speechManagerProvider?.invoke() ?: throw IllegalStateException("SpeechRecognitionManager not provided")
+                val tts = ttsManagerProvider?.invoke() ?: throw IllegalStateException("TextToSpeechManager not provided")
+                VoiceAssistantViewModel(voiceRepo, speech, tts) as T
             }
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }

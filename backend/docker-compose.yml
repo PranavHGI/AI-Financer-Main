@@ -5,13 +5,16 @@ services:
     build: .
     container_name: aifinancer-backend
     ports:
-      - "8085:8000"
+      - "8000:8000"
     volumes:
       # Persists the SQLite database in a local "data" directory on your laptop
       - ./data:/app/data
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql://postgres.cxrjulbuavhsqnwnrkda:Sarthak%402549@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
       - SECRET_KEY=9a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6a7b8c9d0e1f
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-AQ.Ab8RN6IXbUgAmEqMFRLiYAuvQuMKvIgcrDKBZJp-zC7sWKjEbg}
     restart: always

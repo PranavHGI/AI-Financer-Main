@@ -98,6 +98,7 @@ class StandardSmsReceiver : BroadcastReceiver() {
             }
 
             val clientId = java.util.UUID.randomUUID().toString()
+            var transactionInserted = false
 
             db.beginTransaction()
             try {
@@ -115,29 +116,49 @@ class StandardSmsReceiver : BroadcastReceiver() {
                     android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE
                 )
 
-                // Insert transaction record
-                val txVal = ContentValues().apply {
-                    put(DatabaseHelper.COL_TX_USER_ID, activeUser)
-                    put(DatabaseHelper.COL_TX_CLIENT_ID, clientId)
-                    put(DatabaseHelper.COL_TX_TYPE, extracted.type)
-                    put(DatabaseHelper.COL_TX_AMOUNT, extracted.amount)
-                    put(DatabaseHelper.COL_TX_CATEGORY, extracted.category)
-                    put(DatabaseHelper.COL_TX_MERCHANT, extracted.merchant)
-                    put(DatabaseHelper.COL_TX_ACCOUNT, extracted.account)
-                    put(DatabaseHelper.COL_TX_NOTES, "Parsed from live SMS from $sender")
-                    put(DatabaseHelper.COL_TX_SOURCE, "sms")
-                    put(DatabaseHelper.COL_TX_DATE, timestamp)
-                    put(DatabaseHelper.COL_TX_SYNCED, 0)
-                }
-                val rowId = db.insert(DatabaseHelper.TABLE_TRANSACTIONS, null, txVal)
-                db.setTransactionSuccessful()
-
-                Log.i(
-                    TAG,
-                    "[INCOMING SMS STORED] Local DB Row: $rowId | clientId: $clientId | Merchant: '${extracted.merchant}' | Amount: ₹${extracted.amount}"
+                // Content-based deduplication: check if identical transaction exists in TABLE_TRANSACTIONS
+                val isDuplicateTx = dbHelper.hasMatchingTransaction(
+                    db = db,
+                    userId = activeUser,
+                    type = extracted.type,
+                    amount = extracted.amount,
+                    merchant = extracted.merchant,
+                    dateMs = timestamp
                 )
+
+                if (isDuplicateTx) {
+                    Log.i(TAG, "[INCOMING SMS DEDUP] Transaction for '${extracted.merchant}' of ₹${extracted.amount} already exists in transactions table. Skipping insert.")
+                    db.setTransactionSuccessful()
+                } else {
+                    // Insert transaction record
+                    val txVal = ContentValues().apply {
+                        put(DatabaseHelper.COL_TX_USER_ID, activeUser)
+                        put(DatabaseHelper.COL_TX_CLIENT_ID, clientId)
+                        put(DatabaseHelper.COL_TX_TYPE, extracted.type)
+                        put(DatabaseHelper.COL_TX_AMOUNT, extracted.amount)
+                        put(DatabaseHelper.COL_TX_CATEGORY, extracted.category)
+                        put(DatabaseHelper.COL_TX_MERCHANT, extracted.merchant)
+                        put(DatabaseHelper.COL_TX_ACCOUNT, extracted.account)
+                        put(DatabaseHelper.COL_TX_NOTES, "Parsed from live SMS from $sender")
+                        put(DatabaseHelper.COL_TX_SOURCE, "sms")
+                        put(DatabaseHelper.COL_TX_DATE, timestamp)
+                        put(DatabaseHelper.COL_TX_SYNCED, 0)
+                    }
+                    val rowId = db.insert(DatabaseHelper.TABLE_TRANSACTIONS, null, txVal)
+                    db.setTransactionSuccessful()
+                    transactionInserted = true
+
+                    Log.i(
+                        TAG,
+                        "[INCOMING SMS STORED] Local DB Row: $rowId | clientId: $clientId | Merchant: '${extracted.merchant}' | Amount: ₹${extracted.amount}"
+                    )
+                }
             } finally {
                 db.endTransaction()
+            }
+
+            if (!transactionInserted) {
+                continue
             }
 
             // Immediately trigger resilient background upload to backend

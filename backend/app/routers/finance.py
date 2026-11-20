@@ -122,6 +122,15 @@ def get_categories(
     db: Session = Depends(get_db)
 ):
     cats = db.query(Category).all()
+    if not cats:
+        defaults = [
+            "Food & dining", "Travel", "Shopping", "Education", "Bills", 
+            "Entertainment", "Health", "Salary", "Freelance", "Transfer", "Other"
+        ]
+        for c in defaults:
+            db.add(Category(id=str(uuid4()), name=c))
+        db.commit()
+        cats = db.query(Category).all()
     return cats
 
 # Budgets

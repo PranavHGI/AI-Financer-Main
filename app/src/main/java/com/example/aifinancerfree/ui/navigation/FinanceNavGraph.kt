@@ -26,6 +26,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,7 +48,8 @@ fun FinanceNavGraph(
     consentPrefs: ConsentPreferences,
     mode: ThemeMode,
     selectTheme: (ThemeMode) -> Unit,
-    startDestination: String
+    startDestination: String,
+    voiceViewModel: com.example.aifinancerfree.ui.viewmodel.VoiceAssistantViewModel? = null
 ) {
     val isLoggedIn by profileViewModel.isLoggedIn.collectAsState()
     val profileState by profileViewModel.uiState.collectAsState()
@@ -62,7 +69,11 @@ fun FinanceNavGraph(
 
     NavHost(
         navController = nav,
-        startDestination = startDestination
+        startDestination = startDestination,
+        enterTransition = { fadeIn(animationSpec = tween(150)) },
+        exitTransition = { fadeOut(animationSpec = tween(150)) },
+        popEnterTransition = { fadeIn(animationSpec = tween(150)) },
+        popExitTransition = { fadeOut(animationSpec = tween(150)) }
     ) {
         // Unauthenticated Nested Graph
         navigation(
@@ -109,61 +120,56 @@ fun FinanceNavGraph(
             route = Routes.AuthGraph
         ) {
             composable(Routes.Dashboard) {
-                MainScaffold(nav) {
-                    DashboardScreen(
-                        viewModel = financeViewModel,
-                        username = username,
-                        advisor = { nav.go(Routes.Advisor) }
-                    )
-                }
+                AuthenticatedMainScreen(
+                    nav = nav,
+                    financeViewModel = financeViewModel,
+                    profileViewModel = profileViewModel,
+                    goalsViewModel = goalsViewModel,
+                    voiceViewModel = voiceViewModel,
+                    mode = mode,
+                    selectTheme = selectTheme,
+                    username = username,
+                    initialTab = Routes.Dashboard
+                )
             }
             composable(Routes.Transactions) {
-                MainScaffold(nav) {
-                    TransactionsScreen(
-                        viewModel = financeViewModel,
-                        addTx = { nav.go(Routes.Add) }
-                    )
-                }
+                AuthenticatedMainScreen(
+                    nav = nav,
+                    financeViewModel = financeViewModel,
+                    profileViewModel = profileViewModel,
+                    goalsViewModel = goalsViewModel,
+                    voiceViewModel = voiceViewModel,
+                    mode = mode,
+                    selectTheme = selectTheme,
+                    username = username,
+                    initialTab = Routes.Transactions
+                )
             }
             composable(Routes.Goals) {
-                var selectedTab by remember { mutableStateOf(0) }
-                MainScaffold(nav) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        TabRow(selectedTabIndex = selectedTab) {
-                            Tab(
-                                selected = selectedTab == 0,
-                                onClick = { selectedTab = 0 },
-                                text = { Text("Budgets", fontWeight = FontWeight.Bold) }
-                            )
-                            Tab(
-                                selected = selectedTab == 1,
-                                onClick = { selectedTab = 1 },
-                                text = { Text("Savings Goals", fontWeight = FontWeight.Bold) }
-                            )
-                        }
-                        Box(modifier = Modifier.weight(1f)) {
-                            if (selectedTab == 0) {
-                                BudgetsScreen(viewModel = financeViewModel)
-                            } else {
-                                GoalsScreen(viewModel = goalsViewModel)
-                            }
-                        }
-                    }
-                }
+                AuthenticatedMainScreen(
+                    nav = nav,
+                    financeViewModel = financeViewModel,
+                    profileViewModel = profileViewModel,
+                    goalsViewModel = goalsViewModel,
+                    voiceViewModel = voiceViewModel,
+                    mode = mode,
+                    selectTheme = selectTheme,
+                    username = username,
+                    initialTab = Routes.Goals
+                )
             }
             composable(Routes.Profile) {
-                MainScaffold(nav) {
-                    ProfileScreen(
-                        viewModel = profileViewModel,
-                        mode = mode,
-                        select = selectTheme,
-                        onConsent = { nav.go(Routes.Consent) },
-                        logout = {
-                            profileViewModel.logout()
-                            financeViewModel.resetState()
-                        }
-                    )
-                }
+                AuthenticatedMainScreen(
+                    nav = nav,
+                    financeViewModel = financeViewModel,
+                    profileViewModel = profileViewModel,
+                    goalsViewModel = goalsViewModel,
+                    voiceViewModel = voiceViewModel,
+                    mode = mode,
+                    selectTheme = selectTheme,
+                    username = username,
+                    initialTab = Routes.Profile
+                )
             }
             composable(Routes.Add) {
                 AddTransactionScreen(
@@ -182,6 +188,92 @@ fun FinanceNavGraph(
                     prefs = consentPrefs,
                     onBack = { nav.popBackStack() }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun AuthenticatedMainScreen(
+    nav: NavHostController,
+    financeViewModel: FinanceViewModel,
+    profileViewModel: ProfileViewModel,
+    goalsViewModel: GoalsViewModel,
+    voiceViewModel: com.example.aifinancerfree.ui.viewmodel.VoiceAssistantViewModel?,
+    mode: ThemeMode,
+    selectTheme: (ThemeMode) -> Unit,
+    username: String,
+    initialTab: String = Routes.Dashboard
+) {
+    var currentTab by rememberSaveable { mutableStateOf(initialTab) }
+    var selectedGoalsTab by rememberSaveable { mutableStateOf(0) }
+
+    // Intercept back press when not on Dashboard tab, smoothly returning to Dashboard first
+    BackHandler(enabled = currentTab != Routes.Dashboard) {
+        currentTab = Routes.Dashboard
+    }
+
+    MainScaffold(
+        nav = nav,
+        currentTab = currentTab,
+        onTabSelected = { newTab -> currentTab = newTab },
+        voiceViewModel = voiceViewModel,
+        onVoiceUpdate = { financeViewModel.loadData() }
+    ) {
+        Crossfade(
+            targetState = currentTab,
+            label = "TabCrossfade",
+            animationSpec = tween(durationMillis = 150)
+        ) { tab ->
+            when (tab) {
+                Routes.Dashboard -> {
+                    DashboardScreen(
+                        viewModel = financeViewModel,
+                        username = username,
+                        advisor = { nav.go(Routes.Advisor) }
+                    )
+                }
+                Routes.Transactions -> {
+                    TransactionsScreen(
+                        viewModel = financeViewModel,
+                        addTx = { nav.go(Routes.Add) }
+                    )
+                }
+                Routes.Goals -> {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        TabRow(selectedTabIndex = selectedGoalsTab) {
+                            Tab(
+                                selected = selectedGoalsTab == 0,
+                                onClick = { selectedGoalsTab = 0 },
+                                text = { Text("Budgets", fontWeight = FontWeight.Bold) }
+                            )
+                            Tab(
+                                selected = selectedGoalsTab == 1,
+                                onClick = { selectedGoalsTab = 1 },
+                                text = { Text("Savings Goals", fontWeight = FontWeight.Bold) }
+                            )
+                        }
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (selectedGoalsTab == 0) {
+                                BudgetsScreen(viewModel = financeViewModel)
+                            } else {
+                                GoalsScreen(viewModel = goalsViewModel)
+                            }
+                        }
+                    }
+                }
+                Routes.Profile -> {
+                    ProfileScreen(
+                        viewModel = profileViewModel,
+                        mode = mode,
+                        select = selectTheme,
+                        onConsent = { nav.go(Routes.Consent) },
+                        logout = {
+                            profileViewModel.logout()
+                            financeViewModel.resetState()
+                        }
+                    )
+                }
             }
         }
     }

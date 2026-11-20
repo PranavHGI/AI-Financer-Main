@@ -7,4 +7,5 @@ from app.schemas.feedback import FeedbackCreate, FeedbackResponse
 from app.schemas.sms_import import SMSImportCreate, SMSImportResponse
 from app.schemas.insight import InsightCreate, InsightResponse
 from app.schemas.conversation import ConversationMessageCreate, ConversationMessageResponse, AskAdvisorRequest
+from app.schemas.voice import VoiceCommandRequest, VoiceActionEntity, VoiceCommandResponse
 

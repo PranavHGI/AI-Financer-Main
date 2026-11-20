@@ -2,16 +2,22 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 from app.database import get_db
 from app.routers.auth import get_current_user
 from app.models.user import User
 from app.models.transaction import Transaction
 from app.models.budget import Budget
 from app.schemas.advisor import AdvisorChatRequest, AdvisorChatResponse, ChatMessage
+from app.schemas.voice import VoiceCommandRequest, VoiceCommandResponse, VoiceActionEntity
+from app.ml.ml_classifier import rule_based_categorize
 from app.ml.analytics_models import predict_next_month_expense, detect_anomalies
 from collections import defaultdict
+from uuid import uuid4
 import datetime
+import time
+import re
+from app.config import settings
 
 router = APIRouter(prefix="/advisor", tags=["Advisor"])
 
@@ -130,11 +136,12 @@ def generate_offline_advice(
 
 
 CANDIDATE_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
     "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-3.8-flash"
+    "gemini-2.5-pro",
+    "gemini-pro-latest"
 ]
 
 
@@ -232,7 +239,7 @@ async def chat_with_advisor(
         f"Be conversational but brief, avoiding long generic essays. Maintain a pure budgeting advisor focus."
     )
 
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
 
     if not api_key:
         return AdvisorChatResponse(
@@ -312,4 +319,284 @@ async def chat_with_advisor(
             anomaly_summary=anomaly_summary,
             reason="Live Gemini AI is experiencing high demand; generated from live transactions."
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# AI Voice Assistant Intent Engine & Command Router (Part 1)
+# ---------------------------------------------------------------------------
+
+CATEGORIES_LIST = [
+    "Food & dining", "Travel", "Shopping", "Education", "Bills",
+    "Entertainment", "Health", "Salary", "Freelance", "Transfer", "Other"
+]
+
+def extract_voice_amount(text: str) -> Optional[float]:
+    """Extract numeric transaction amounts from natural language transcripts."""
+    # 1. Match '5k' or '2.5k'
+    k_match = re.search(r'(?i)\b(\d+(?:\.\d+)?)\s*k\b', text)
+    if k_match:
+        try:
+            return float(k_match.group(1)) * 1000.0
+        except ValueError:
+            pass
+
+    # 2. Match standard currency expressions (₹, Rs, INR, rupees, bucks, or standalone digits)
+    patterns = [
+        r'(?i)(?:rs\.?|inr|₹|rupees|bucks)\s*([\d,]+(?:\.\d{1,2})?)',
+        r'(?i)(?:spent|paid|for|of|received|amount|cost)\s*(?:of|is)?\s*(?:rs\.?|inr|₹|rupees|bucks)?\s*([\d,]+(?:\.\d{1,2})?)',
+        r'\b(\d+(?:,\d+)*(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹|rupees|bucks)\b',
+        r'\b(\d+(?:\.\d{1,2})?)\b'
+    ]
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            clean = m.group(1).replace(",", "").strip()
+            val = float(clean)
+            if val > 0.0:
+                return val
+    return None
+
+def extract_voice_merchant(text: str, amount_val: Optional[float] = None) -> str:
+    """Extract clean merchant or payee name from spoken query."""
+    clean = text.lower()
+
+    # 1. Prioritize recognizable brands
+    known_merchants = [
+        "Starbucks", "McDonalds", "Swiggy", "Zomato", "KFC", "Dominos", "Subway", "Blinkit", "Zepto", "Instamart",
+        "Uber", "Ola", "Airtel", "Jio", "Amazon", "Flipkart", "Myntra", "Zara", "Netflix", "Spotify", "Apollo"
+    ]
+    for km in known_merchants:
+        if re.search(r'(?i)\b' + re.escape(km.lower()) + r'\b', clean):
+            return km
+
+    # 2. Strip common leading verbs, numbers, and currency keywords with word boundaries
+    if amount_val:
+        clean = re.sub(r'(?i)\b' + str(int(amount_val)) + r'\b', '', clean)
+        clean = re.sub(r'(?i)\b' + str(amount_val) + r'\b', '', clean)
+    clean = re.sub(r'(?i)\b(?:rs\.?|inr|₹|rupees|bucks|spent|paid|bought|received|earned|added)\b', '', clean)
+
+    # 3. Look for preposition indicators (at Starbucks, to Uber, from Amazon, for electricity)
+    m = re.search(r'(?i)\b(?:at|to|from|for|on)\s+([a-z0-9\s&\'\-]+?)(?=\s+(?:via|using|from|with|on|in|today|yesterday|\.|$))', clean)
+    if m:
+        candidate = m.group(1).strip()
+        # Filter generic non-merchant words
+        if candidate and candidate not in ["coffee", "lunch", "dinner", "groceries", "food", "bills", "myself", "me"]:
+            return candidate.title()
+
+    return "Store / Merchant"
+
+def resolve_voice_category(text: str, merchant: str) -> str:
+    """Map natural spoken language and merchant to one of 11 standard categories."""
+    combined = f"{merchant} {text}".lower()
+    
+    if any(k in combined for k in ["salary", "paycheck", "wages", "stipend"]):
+        return "Salary"
+    if any(k in combined for k in ["freelance", "upwork", "fiverr", "client project", "contract"]):
+        return "Freelance"
+    if any(k in combined for k in ["self transfer", "transfer to", "transferred to self"]):
+        return "Transfer"
+    if any(k in combined for k in ["uber", "ola", "cab", "taxi", "flight", "petrol", "fuel", "metro", "train", "travel"]):
+        return "Travel"
+    if any(k in combined for k in ["starbucks", "coffee", "lunch", "dinner", "food", "restaurant", "cafe", "swiggy", "zomato", "burger", "pizza", "kfc"]):
+        return "Food & dining"
+    if any(k in combined for k in ["electricity", "water bill", "gas", "bill", "recharge", "airtel", "jio", "wifi", "broadband"]):
+        return "Bills"
+    if any(k in combined for k in ["netflix", "movie", "cinema", "prime", "spotify", "game", "theater", "entertainment"]):
+        return "Entertainment"
+    if any(k in combined for k in ["hospital", "doctor", "pharmacy", "medicine", "clinic", "health", "dental", "apollo"]):
+        return "Health"
+    if any(k in combined for k in ["school", "college", "tuition", "course", "udemy", "book", "education", "fees"]):
+        return "Education"
+    if any(k in combined for k in ["amazon", "flipkart", "shopping", "clothes", "store", "mall", "grocery", "mart", "blinkit", "zepto"]):
+        return "Shopping"
+
+    # Use model / keyword helper
+    cat = rule_based_categorize(merchant)
+    return cat if cat in CATEGORIES_LIST else "Other"
+
+def extract_voice_account(text: str, default_account: str = "Cash") -> str:
+    """Detect payment method mentioned in transcript."""
+    t = text.lower()
+    if any(k in t for k in ["credit card", "credit", "card"]):
+        return "Credit Card"
+    if any(k in t for k in ["bank", "account", "upi", "gpay", "google pay", "phonepe", "paytm", "debit"]):
+        return "Bank Account"
+    return default_account or "Cash"
+
+
+@router.post("/voice-command", response_model=VoiceCommandResponse)
+async def process_voice_command(
+    request: VoiceCommandRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db)
+):
+    transcript = request.transcript.strip()
+    if not transcript:
+        return VoiceCommandResponse(
+            action_type="UNKNOWN",
+            spoken_text="I did not catch that. Please tap the microphone and speak again.",
+            display_text="No audio transcript received."
+        )
+
+    clean_t = transcript.lower()
+
+    # 1. INTENT: Query Spending
+    if any(clean_t.startswith(q) or f" {q} " in clean_t for q in ["how much did i spend", "what did i spend", "how much spent", "total spend", "spending this month", "my expenses"]):
+        txs = db.query(Transaction).filter(Transaction.user_id == current_user.id, Transaction.type == "expense").all()
+        target_category = next((c for c in CATEGORIES_LIST if c.lower() in clean_t), None)
+        
+        if target_category:
+            cat_sum = sum(parse_amount(tx.amount) for tx in txs if tx.category == target_category)
+            spoken = f"You have spent {cat_sum:,.0f} rupees on {target_category}."
+            display = f"Total {target_category} spending: ₹{cat_sum:,.2f}"
+            return VoiceCommandResponse(
+                action_type="QUERY_SPENDING",
+                spoken_text=spoken,
+                display_text=display,
+                data={"category": target_category, "spent": cat_sum}
+            )
+        else:
+            total_spent = sum(parse_amount(tx.amount) for tx in txs if tx.category != "Transfer")
+            spoken = f"You have spent a total of {total_spent:,.0f} rupees across {len(txs)} transactions."
+            display = f"Total recorded expenses: ₹{total_spent:,.2f} ({len(txs)} transactions)"
+            return VoiceCommandResponse(
+                action_type="QUERY_SPENDING",
+                spoken_text=spoken,
+                display_text=display,
+                data={"total_spent": total_spent, "count": len(txs)}
+            )
+
+    # 2. INTENT: Query Budget
+    if any(k in clean_t for k in ["budget status", "within budget", "budget left", "how much budget"]):
+        budgets = db.query(Budget).filter(Budget.user_id == current_user.id).all()
+        txs = db.query(Transaction).filter(Transaction.user_id == current_user.id, Transaction.type == "expense").all()
+        
+        category_spent = defaultdict(float)
+        for tx in txs:
+            category_spent[tx.category] += parse_amount(tx.amount)
+
+        if not budgets:
+            spoken = "You have not configured any category budgets yet. You can set one by speaking or in the Goals tab."
+            display = "No category budgets found for this account."
+            return VoiceCommandResponse(action_type="QUERY_BUDGET", spoken_text=spoken, display_text=display)
+
+        overrun = []
+        for b in budgets:
+            s = category_spent[b.category]
+            if s > b.amount:
+                overrun.append(f"{b.category} by {s - b.amount:,.0f} rupees")
+
+        if overrun:
+            spoken = f"Alert: You have exceeded budget in {', '.join(overrun)}."
+            display = f"Over-budget categories: {', '.join(overrun)}"
+        else:
+            spoken = "Great news! You are currently within budget limits for all configured categories."
+            display = "All category budgets are healthy and within limits."
+
+        return VoiceCommandResponse(
+            action_type="QUERY_BUDGET",
+            spoken_text=spoken,
+            display_text=display,
+            data={"over_budget_count": len(overrun)}
+        )
+
+    # 3. INTENT: Set Budget by Voice ("set budget of 5000 for Food")
+    if "set budget" in clean_t or "limit of" in clean_t:
+        amount_val = extract_voice_amount(clean_t)
+        target_category = next((c for c in CATEGORIES_LIST if c.lower() in clean_t), "Other")
+        
+        if amount_val and amount_val > 0.0:
+            existing_b = db.query(Budget).filter(Budget.user_id == current_user.id, Budget.category == target_category).first()
+            if existing_b:
+                existing_b.amount = amount_val
+            else:
+                db.add(Budget(id=str(uuid4()), user_id=current_user.id, category=target_category, amount=amount_val))
+            db.commit()
+
+            spoken = f"Your monthly budget for {target_category} has been set to {amount_val:,.0f} rupees."
+            display = f"Budget for {target_category} updated to ₹{amount_val:,.2f}"
+            return VoiceCommandResponse(
+                action_type="SET_BUDGET",
+                spoken_text=spoken,
+                display_text=display,
+                data={"category": target_category, "limit": amount_val}
+            )
+
+    # 4. INTENT: Log Transaction (Expense or Income)
+    amount_val = extract_voice_amount(transcript)
+    if amount_val and amount_val > 0.0:
+        is_income = any(clean_t.startswith(w) or f" {w} " in clean_t for w in ["earned", "received", "salary", "freelance", "got", "income", "credited"])
+        tx_type = "income" if is_income else "expense"
+        merchant = extract_voice_merchant(transcript, amount_val)
+        category = resolve_voice_category(transcript, merchant)
+        account = extract_voice_account(transcript, request.account_preference or "Cash")
+        tx_timestamp = request.client_timestamp or time.time()
+
+        # Commit directly to database with source = 'voice'
+        new_tx = Transaction(
+            id=str(uuid4()),
+            user_id=current_user.id,
+            type=tx_type,
+            amount=f"₹{amount_val:.2f}",
+            category=category,
+            merchant=merchant,
+            timestamp=tx_timestamp,
+            source="voice",
+            description=f"Logged via Voice: \"{transcript}\"",
+            masked_account_ref=account,
+            confidence=1.0
+        )
+        db.add(new_tx)
+        db.commit()
+        db.refresh(new_tx)
+
+        spoken_amt = f"{amount_val:,.0f}" if amount_val.is_integer() else f"{amount_val:,.2f}"
+        if tx_type == "expense":
+            spoken = f"Logged {spoken_amt} rupees for {merchant} under {category}."
+            display = f"Expense of ₹{amount_val:,.2f} recorded for {merchant} ({category})."
+        else:
+            spoken = f"Received {spoken_amt} rupees income recorded under {category}."
+            display = f"Income of ₹{amount_val:,.2f} from {merchant} recorded under {category}."
+
+        entity = VoiceActionEntity(
+            action_type="LOG_TRANSACTION",
+            transaction_id=new_tx.id,
+            type=tx_type,
+            amount=amount_val,
+            merchant=merchant,
+            category=category,
+            account=account,
+            notes=new_tx.description,
+            executed=True
+        )
+
+        return VoiceCommandResponse(
+            action_type="LOG_TRANSACTION",
+            spoken_text=spoken,
+            display_text=display,
+            entity=entity,
+            data={"transaction_id": new_tx.id, "amount": amount_val, "merchant": merchant, "category": category}
+        )
+
+    # 5. INTENT: General Conversational Guidance (Call candidate models or offline fallback)
+    advice = generate_offline_advice(
+        query=transcript,
+        username=current_user.username,
+        total_income=0.0,
+        total_spent=0.0,
+        safe_to_spend=0.0,
+        category_spending={},
+        budgets=[],
+        transactions=[],
+        prediction=0.0,
+        anomaly_summary="",
+        reason="Voice assistant financial advice."
+    )
+    # Strip markdown headers for spoken voice
+    spoken_summary = re.sub(r'[\*#_`]', '', advice).split("\n\n")[0].strip()
+    return VoiceCommandResponse(
+        action_type="GENERAL_ADVICE",
+        spoken_text=spoken_summary[:200] if spoken_summary else "Here is what I found based on your financial patterns.",
+        display_text=advice
     )

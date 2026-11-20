@@ -23,6 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,6 +53,21 @@ fun DashboardScreen(
     advisor: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val app = context.applicationContext as? com.example.aifinancerfree.AIFinancerApplication
+                    ?: com.example.aifinancerfree.AIFinancerApplication.instance
+                app.smsAccessManager.refresh()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     val greeting = remember {
         when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
@@ -100,8 +118,9 @@ fun DashboardScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.loadData()
-        viewModel.syncRemote()
+        if (transactions.isEmpty()) {
+            viewModel.loadData()
+        }
     }
 
     LazyColumn(

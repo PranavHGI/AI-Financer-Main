@@ -3,6 +3,7 @@ package com.example.aifinancerfree.data.local
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.Log
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -118,6 +119,125 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
             db.delete(TABLE_PARSED_SMS, "$COL_SMS_USER_ID = ?", arrayOf(userId))
         } else {
             db.delete(TABLE_PARSED_SMS, null, null)
+        }
+    }
+
+    /**
+     * Checks if a transaction matching the given content already exists in the transactions table.
+     * Prevents duplicate entries regardless of client_id or fingerprint discrepancies.
+     *
+     * @param db Readable or writable SQLiteDatabase
+     * @param userId Active user ID
+     * @param type Transaction type ('expense' or 'income')
+     * @param amount Transaction amount
+     * @param merchant Merchant or party name
+     * @param dateMs Transaction timestamp in milliseconds
+     * @param windowMs Timestamp tolerance in milliseconds (default: 3 minutes)
+     * @return true if an identical transaction exists within the tolerance window, false otherwise
+     */
+    fun hasMatchingTransaction(
+        db: SQLiteDatabase,
+        userId: String,
+        type: String,
+        amount: Double,
+        merchant: String,
+        dateMs: Long,
+        windowMs: Long = 180_000L
+    ): Boolean {
+        val minDate = dateMs - windowMs
+        val maxDate = dateMs + windowMs
+        val minAmount = amount - 0.01
+        val maxAmount = amount + 0.01
+        val normMerchant = merchant.trim()
+
+        val query = if (userId.isNotEmpty()) {
+            """
+            SELECT 1 FROM $TABLE_TRANSACTIONS 
+            WHERE $COL_TX_USER_ID = ? 
+              AND $COL_TX_TYPE = ? 
+              AND $COL_TX_MERCHANT = ? COLLATE NOCASE 
+              AND $COL_TX_AMOUNT >= ? AND $COL_TX_AMOUNT <= ? 
+              AND $COL_TX_DATE >= ? AND $COL_TX_DATE <= ? 
+            LIMIT 1
+            """.trimIndent()
+        } else {
+            """
+            SELECT 1 FROM $TABLE_TRANSACTIONS 
+            WHERE $COL_TX_TYPE = ? 
+              AND $COL_TX_MERCHANT = ? COLLATE NOCASE 
+              AND $COL_TX_AMOUNT >= ? AND $COL_TX_AMOUNT <= ? 
+              AND $COL_TX_DATE >= ? AND $COL_TX_DATE <= ? 
+            LIMIT 1
+            """.trimIndent()
+        }
+
+        val args = if (userId.isNotEmpty()) {
+            arrayOf(
+                userId,
+                type,
+                normMerchant,
+                minAmount.toString(),
+                maxAmount.toString(),
+                minDate.toString(),
+                maxDate.toString()
+            )
+        } else {
+            arrayOf(
+                type,
+                normMerchant,
+                minAmount.toString(),
+                maxAmount.toString(),
+                minDate.toString(),
+                maxDate.toString()
+            )
+        }
+
+        val cursor = db.rawQuery(query, args)
+        val exists = cursor.count > 0
+        cursor.close()
+        return exists
+    }
+
+    /**
+     * Safely cleans up existing duplicate transaction records in TABLE_TRANSACTIONS,
+     * retaining the earliest inserted record (lowest id) for any identical
+     * (user_id, type, amount, merchant, date) groups.
+     *
+     * @param userId Optional active user filter. If null, cleans up all duplicates.
+     * @return Number of duplicate rows deleted.
+     */
+    fun cleanupDuplicateTransactions(userId: String? = null): Int {
+        val db = writableDatabase
+        return try {
+            val userFilter = if (!userId.isNullOrEmpty()) "AND t1.$COL_TX_USER_ID = ?" else ""
+            val userArgs = if (!userId.isNullOrEmpty()) arrayOf(userId) else null
+
+            val deleteSql = """
+                DELETE FROM $TABLE_TRANSACTIONS
+                WHERE $COL_TX_ID IN (
+                    SELECT t1.$COL_TX_ID
+                    FROM $TABLE_TRANSACTIONS t1
+                    JOIN $TABLE_TRANSACTIONS t2
+                      ON (t1.$COL_TX_USER_ID = t2.$COL_TX_USER_ID OR (t1.$COL_TX_USER_ID IS NULL AND t2.$COL_TX_USER_ID IS NULL))
+                     AND t1.$COL_TX_TYPE = t2.$COL_TX_TYPE
+                     AND t1.$COL_TX_MERCHANT = t2.$COL_TX_MERCHANT COLLATE NOCASE
+                     AND ABS(t1.$COL_TX_AMOUNT - t2.$COL_TX_AMOUNT) < 0.01
+                     AND ABS(t1.$COL_TX_DATE - t2.$COL_TX_DATE) <= 180000
+                     AND t1.$COL_TX_ID > t2.$COL_TX_ID
+                    $userFilter
+                )
+            """.trimIndent()
+
+            if (userArgs != null) {
+                db.execSQL(deleteSql, userArgs)
+            } else {
+                db.execSQL(deleteSql)
+            }
+            Log.i("DatabaseHelper", "[CLEANUP] Completed duplicate transaction sweep.")
+            1
+        } catch (e: Exception) {
+            Log.e("DatabaseHelper", "[CLEANUP ERROR] Failed cleaning duplicates", e)
+            0
         }
     }
 }

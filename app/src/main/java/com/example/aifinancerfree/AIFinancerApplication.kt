@@ -8,6 +8,9 @@ import com.example.aifinancerfree.data.network.ApiClient
 import com.example.aifinancerfree.data.repository.AuthRepository
 import com.example.aifinancerfree.data.repository.TransactionRepository
 import com.example.aifinancerfree.data.sms.SmsAccessManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class AIFinancerApplication : Application() {
 
@@ -32,6 +35,23 @@ class AIFinancerApplication : Application() {
     lateinit var smsAccessManager: SmsAccessManager
         private set
 
+    val speechRecognitionManager: com.example.aifinancerfree.data.voice.SpeechRecognitionManager by lazy {
+        com.example.aifinancerfree.data.voice.SpeechRecognitionManager(this)
+    }
+
+    val textToSpeechManager: com.example.aifinancerfree.data.voice.TextToSpeechManager by lazy {
+        com.example.aifinancerfree.data.voice.TextToSpeechManager(this)
+    }
+
+    val voiceAssistantRepository: com.example.aifinancerfree.data.repository.VoiceAssistantRepository by lazy {
+        com.example.aifinancerfree.data.repository.VoiceAssistantRepository(
+            apiService = apiClient.apiService,
+            dbHelper = databaseHelper,
+            tokenManager = tokenManager,
+            transactionRepository = transactionRepository
+        )
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -43,6 +63,11 @@ class AIFinancerApplication : Application() {
         databaseHelper = DatabaseHelper(this)
         transactionRepository = TransactionRepository(apiClient.apiService, databaseHelper, tokenManager)
         smsAccessManager = SmsAccessManager(this, consentPreferences)
+
+        // Asynchronously clean up any existing duplicate records on IO dispatcher
+        CoroutineScope(Dispatchers.IO).launch {
+            databaseHelper.cleanupDuplicateTransactions()
+        }
     }
 
     companion object {

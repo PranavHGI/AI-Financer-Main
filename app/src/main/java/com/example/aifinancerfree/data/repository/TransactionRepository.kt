@@ -386,28 +386,79 @@ class TransactionRepository(
                 cursor.close()
 
                 if (!alreadyExists) {
-                    val values = ContentValues().apply {
-                        put(DatabaseHelper.COL_TX_USER_ID, activeUser)
-                        put(DatabaseHelper.COL_TX_REMOTE_ID, tx.id)
-                        if (!tx.clientId.isNullOrEmpty()) {
-                            put(DatabaseHelper.COL_TX_CLIENT_ID, tx.clientId)
-                        }
-                        put(DatabaseHelper.COL_TX_TYPE, tx.type)
-                        
-                        val cleanedAmount = tx.amount.replace("₹", "").replace("+", "").replace("-", "").replace(",", "").trim()
-                        val amtDouble = cleanedAmount.toDoubleOrNull() ?: 0.0
-                        put(DatabaseHelper.COL_TX_AMOUNT, amtDouble)
+                    val cleanedAmount = tx.amount.replace("₹", "").replace("+", "").replace("-", "").replace(",", "").trim()
+                    val amtDouble = cleanedAmount.toDoubleOrNull() ?: 0.0
+                    val remoteDateMs = (tx.timestamp * 1000).toLong()
 
-                        put(DatabaseHelper.COL_TX_CATEGORY, tx.category)
-                        put(DatabaseHelper.COL_TX_MERCHANT, tx.merchant)
-                        put(DatabaseHelper.COL_TX_ACCOUNT, if (tx.maskedAccountRef.isEmpty()) "Main Account" else tx.maskedAccountRef)
-                        put(DatabaseHelper.COL_TX_NOTES, tx.description)
-                        put(DatabaseHelper.COL_TX_SOURCE, tx.source)
-                        put(DatabaseHelper.COL_TX_DATE, (tx.timestamp * 1000).toLong())
-                        put(DatabaseHelper.COL_TX_SYNCED, 1)
+                    // Check if an unlinked local transaction matches this content (e.g. an SMS or manual row without remote_id)
+                    val minDate = remoteDateMs - 180_000L
+                    val maxDate = remoteDateMs + 180_000L
+                    val minAmt = amtDouble - 0.01
+                    val maxAmt = amtDouble + 0.01
+
+                    val matchCursor = db.rawQuery(
+                        """
+                        SELECT ${DatabaseHelper.COL_TX_ID} FROM ${DatabaseHelper.TABLE_TRANSACTIONS}
+                        WHERE ${DatabaseHelper.COL_TX_USER_ID} = ?
+                          AND ${DatabaseHelper.COL_TX_TYPE} = ?
+                          AND ${DatabaseHelper.COL_TX_MERCHANT} = ? COLLATE NOCASE
+                          AND ${DatabaseHelper.COL_TX_AMOUNT} >= ? AND ${DatabaseHelper.COL_TX_AMOUNT} <= ?
+                          AND ${DatabaseHelper.COL_TX_DATE} >= ? AND ${DatabaseHelper.COL_TX_DATE} <= ?
+                          AND (${DatabaseHelper.COL_TX_REMOTE_ID} IS NULL OR ${DatabaseHelper.COL_TX_REMOTE_ID} = '')
+                        LIMIT 1
+                        """.trimIndent(),
+                        arrayOf(
+                            activeUser,
+                            tx.type,
+                            tx.merchant.trim(),
+                            minAmt.toString(),
+                            maxAmt.toString(),
+                            minDate.toString(),
+                            maxDate.toString()
+                        )
+                    )
+
+                    if (matchCursor.moveToFirst()) {
+                        val localMatchId = matchCursor.getLong(0)
+                        matchCursor.close()
+
+                        // Merge: update the local unlinked record instead of inserting a duplicate
+                        val updateValues = ContentValues().apply {
+                            put(DatabaseHelper.COL_TX_REMOTE_ID, tx.id)
+                            put(DatabaseHelper.COL_TX_SYNCED, 1)
+                            if (!tx.clientId.isNullOrEmpty()) {
+                                put(DatabaseHelper.COL_TX_CLIENT_ID, tx.clientId)
+                            }
+                        }
+                        db.update(
+                            DatabaseHelper.TABLE_TRANSACTIONS,
+                            updateValues,
+                            "${DatabaseHelper.COL_TX_ID} = ?",
+                            arrayOf(localMatchId.toString())
+                        )
+                        Log.i(TAG, "[REMOTE FETCH MERGE] Merged remote tx ${tx.id} into local row $localMatchId (prevented double entry)")
+                    } else {
+                        matchCursor.close()
+
+                        val values = ContentValues().apply {
+                            put(DatabaseHelper.COL_TX_USER_ID, activeUser)
+                            put(DatabaseHelper.COL_TX_REMOTE_ID, tx.id)
+                            if (!tx.clientId.isNullOrEmpty()) {
+                                put(DatabaseHelper.COL_TX_CLIENT_ID, tx.clientId)
+                            }
+                            put(DatabaseHelper.COL_TX_TYPE, tx.type)
+                            put(DatabaseHelper.COL_TX_AMOUNT, amtDouble)
+                            put(DatabaseHelper.COL_TX_CATEGORY, tx.category)
+                            put(DatabaseHelper.COL_TX_MERCHANT, tx.merchant)
+                            put(DatabaseHelper.COL_TX_ACCOUNT, if (tx.maskedAccountRef.isEmpty()) "Main Account" else tx.maskedAccountRef)
+                            put(DatabaseHelper.COL_TX_NOTES, tx.description)
+                            put(DatabaseHelper.COL_TX_SOURCE, tx.source)
+                            put(DatabaseHelper.COL_TX_DATE, remoteDateMs)
+                            put(DatabaseHelper.COL_TX_SYNCED, 1)
+                        }
+                        db.insert(DatabaseHelper.TABLE_TRANSACTIONS, null, values)
+                        newCachedCount++
                     }
-                    db.insert(DatabaseHelper.TABLE_TRANSACTIONS, null, values)
-                    newCachedCount++
                 }
             }
 

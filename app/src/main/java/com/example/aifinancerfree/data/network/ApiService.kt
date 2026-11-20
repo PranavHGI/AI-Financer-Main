@@ -92,4 +92,9 @@ interface ApiService {
 
     @GET("health")
     suspend fun healthCheck(): Map<String, String>
+
+    @POST("advisor/voice-command")
+    suspend fun processVoiceCommand(
+        @Body request: VoiceCommandRequest
+    ): VoiceCommandResponse
 }

@@ -54,28 +54,27 @@ fun BudgetsScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.loadData()
+        if (budgets.isEmpty()) {
+            viewModel.loadData()
+        }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Monthly Budgets", fontWeight = FontWeight.Bold) }
-            )
-        }
-    ) { pad ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(pad)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                text = "Manage your limits and track monthly progress.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "Monthly Budgets",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = "Manage your limits and track monthly progress.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -137,7 +136,6 @@ fun BudgetsScreen(
             )
         }
     }
-}
 
 @Composable
 private fun BudgetItem(

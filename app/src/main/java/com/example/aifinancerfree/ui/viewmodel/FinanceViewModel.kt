@@ -14,7 +14,9 @@ import com.example.aifinancerfree.data.sms.SmsSyncManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import java.util.Calendar
@@ -212,12 +214,11 @@ class FinanceViewModel(
         viewModelScope.launch {
             _isSyncing.value = true
             try {
-                val contentResolver = context.contentResolver
-                val inputStream = contentResolver.openInputStream(uri) ?: throw Exception("Failed to open image stream")
-                val bytes = inputStream.readBytes()
-                inputStream.close()
+                val bytes = withContext(Dispatchers.IO) {
+                    com.example.aifinancerfree.util.ImageUtils.compressAndOrientImage(context, uri)
+                }
 
-                val requestFile = okhttp3.RequestBody.create("image/*".toMediaTypeOrNull(), bytes)
+                val requestFile = okhttp3.RequestBody.create("image/jpeg".toMediaTypeOrNull(), bytes)
                 val body = MultipartBody.Part.createFormData("file", "receipt.jpg", requestFile)
 
                 val response = repository.uploadReceipt(body)

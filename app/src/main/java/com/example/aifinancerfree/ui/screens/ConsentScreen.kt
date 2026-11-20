@@ -51,8 +51,12 @@ fun ConsentScreen(
 
     fun refreshStates() {
         accessManager.refresh()
-        isConsentGranted = accessManager.isConsentGranted()
         hasPermissions = accessManager.hasAllRequiredPermissions()
+        // If system permission was revoked in Android Settings, synchronize internal consent state
+        if (!hasPermissions && accessManager.isConsentGranted()) {
+            accessManager.setConsentEnabled(false)
+        }
+        isConsentGranted = accessManager.isConsentGranted()
     }
 
     // Refresh when returning from system settings
@@ -213,6 +217,14 @@ fun ConsentScreen(
 
             Spacer(Modifier.weight(1f))
 
+            // Manage OS App Permissions
+            OutlinedButton(
+                onClick = { accessManager.openAppSettings(context) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Manage Android Permissions in Settings")
+            }
+
             // Reset Import History Button
             Button(
                 onClick = { showResetHistoryDialog = true },
@@ -238,14 +250,20 @@ fun ConsentScreen(
             onDismissRequest = { showRevokeDialog = false },
             title = { Text("Disable SMS Tracking") },
             text = {
-                Text("SMS transaction parsing will be paused immediately. To fully revoke Android system permissions, you can open App Settings.")
+                Text("SMS transaction parsing will stop immediately.\n\nTo also revoke the Android system permissions directly at the OS level, you can tap 'Revoke in Settings'.")
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         accessManager.setConsentEnabled(false)
+                        val scheduled = accessManager.revokeSmsPermissions(context)
                         refreshStates()
                         showRevokeDialog = false
+                        if (scheduled) {
+                            Toast.makeText(context, "SMS ingestion disabled. OS permission revocation scheduled.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "SMS ingestion disabled.", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 ) {
                     Text("Turn Off")
@@ -254,14 +272,14 @@ fun ConsentScreen(
             dismissButton = {
                 TextButton(
                     onClick = {
-                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.fromParts("package", context.packageName, null)
-                        }
-                        context.startActivity(intent)
+                        accessManager.setConsentEnabled(false)
+                        accessManager.revokeSmsPermissions(context)
+                        refreshStates()
                         showRevokeDialog = false
+                        accessManager.openAppSettings(context)
                     }
                 ) {
-                    Text("App Settings")
+                    Text("Revoke in Settings")
                 }
             }
         )
@@ -279,6 +297,7 @@ fun ConsentScreen(
                 TextButton(
                     onClick = {
                         accessManager.clearConsent()
+                        accessManager.revokeSmsPermissions(context)
                         refreshStates()
                         showResetConsentDialog = false
                         Toast.makeText(context, "Consent settings cleared.", Toast.LENGTH_SHORT).show()
